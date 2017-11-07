@@ -1,0 +1,308 @@
+from pyjarowinkler import distance
+import math
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import RegexpTokenizer
+from stop_words import get_stop_words
+from nltk.stem.porter import PorterStemmer
+from gensim import corpora, models
+from sklearn.metrics import euclidean_distances
+import gensim
+import pymysql
+import pymysql.cursors
+from gensim import corpora, models
+import math
+from textblob import TextBlob as tb
+from sklearn import metrics
+from sklearn.metrics import pairwise_distances
+import numpy as np
+from sklearn.cluster import KMeans
+from sklearn.cluster import AgglomerativeClustering
+import requests
+import json
+import time
+
+
+def macro_precision(result, y, n_cluster):
+	groupDict = {}
+	i= 0
+	for item in result:
+		if item in groupDict:
+			groupDict[item].append(i)
+		else:
+			groupDict[item] = [i]
+		i = i + 1
+
+	trueDict = {}
+	i = 0
+	for item in y:
+		if item not in trueDict:
+			trueDict[item] = [i]
+		else:
+			trueDict[item].append(i)
+		i = i + 1
+
+	inverseTrue = {}
+	for key in trueDict.keys():
+		for item in trueDict[key]:
+			inverseTrue[item] = key
+	
+	totalNotSame = 0
+	for key in groupDict.keys():
+		temp = groupDict[key]
+		f_id = ""
+		i = 0
+		control = True
+		while i < len(temp) and control == True:
+			f_id_cur = inverseTrue[temp[i]]
+			if f_id == "":
+				f_id = f_id_cur
+			else:
+				if f_id_cur != f_id:
+					totalNotSame += 1
+					control = False
+			i += 1
+					
+	return (n_cluster-totalNotSame) / n_cluster
+
+def macro_recall(result, y, n_cluster):
+	return macro_precision(y, result, n_cluster)
+
+def micro_precision(result, y):
+	lenC = len(result)
+	groupDict = {}
+	i= 0
+	for item in result:
+		if item in groupDict:
+			groupDict[item].append(i)
+		else:
+			groupDict[item] = [i]
+		i = i + 1
+
+	trueDict = {}
+	i = 0
+	for item in y:
+		if item not in trueDict:
+			trueDict[item] = [i]
+		else:
+			trueDict[item].append(i)
+		i = i + 1
+
+	inverseTrue = {}
+	for key in trueDict.keys():
+		for item in trueDict[key]:
+			inverseTrue[item] = key
+	
+	totalSame = 0
+	for key in groupDict.keys():
+		temp = groupDict[key]
+		output = {}
+		maxO = 0
+		maxKey = ""
+		for item in temp:
+			f_id = inverseTrue[item]
+			if f_id not in output:
+				output[f_id] = 1
+			else:
+				output[f_id] += 1
+			
+			if output[f_id] > maxO:
+				maxO = output[f_id]
+				maxKey = key
+				
+		totalSame += maxO
+	return  totalSame / lenC
+				
+def micro_recall(result, y):
+	return micro_precision(y, result)
+
+
+def pairwise_precision(result, y):
+	lenC = len(result)
+	groupDict = {}
+	i= 0
+	for item in y:
+		if item in groupDict:
+			groupDict[item].append(i)
+		else:
+			groupDict[item] = [i]
+		i = i + 1
+
+	trueDict = {}
+	i = 0
+	for item in result:
+		if item not in trueDict:
+			trueDict[item] = [i]
+		else:
+			trueDict[item].append(i)
+		i = i + 1
+
+	inverseTrue = {}
+	for key in trueDict.keys():
+		for item in trueDict[key]:
+			inverseTrue[item] = key
+	
+	totalPair = 0
+	totalHit = 0
+	for key in groupDict.keys():
+		temp = groupDict[key]
+		i = 0
+		j = 0
+		while i < len(temp):
+			while j < len(temp):
+				f_id_i = inverseTrue[temp[i]]
+				f_id_j = inverseTrue[temp[j]]
+				if f_id_i == f_id_j:
+					totalHit += 1
+				j += 1
+				totalPair += 1
+			i += 1
+		
+	return  totalHit / totalPair
+
+
+def pairwise_recall(result, y):
+	lenC = len(result)
+	groupDict = {}
+	i= 0
+	for item in y:
+		if item in groupDict:
+			groupDict[item].append(i)
+		else:
+			groupDict[item] = [i]
+		i = i + 1
+
+	trueDict = {}
+	i = 0
+	for item in result:
+		if item not in trueDict:
+			trueDict[item] = [i]
+		else:
+			trueDict[item].append(i)
+		i = i + 1
+
+	inverseGroup = {}
+	for key in groupDict.keys():
+		for item in groupDict[key]:
+			inverseGroup[item] = key
+	
+	totalPair = 0
+	totalHit = 0
+	for key in trueDict.keys():
+		temp = trueDict[key]
+		i = 0
+		j = 0
+		while i < len(temp):
+			while j < len(temp):
+				f_id_i = inverseGroup[temp[i]]
+				f_id_j = inverseGroup[temp[j]]
+				if f_id_i == f_id_j:
+					totalHit += 1
+				j += 1
+				totalPair += 1
+			i += 1
+		
+	return  totalHit / totalPair
+
+
+# In[7]:
+
+def connect_to_database():
+	options = {
+		'user': "root",
+		'passwd': "root",
+		'db': "KnowBase",
+		'cursorclass' : pymysql.cursors.DictCursor
+	}
+	db = pymysql.connect(**options)
+	db.autocommit(True)
+	return db
+
+
+def tf(word, blob):
+	return blob.count(word) / len(blob)
+
+def idf_func(word, blob):
+	return np.log(1 / float(blob.count(word) + 1))
+
+def tfidf(word, blob):
+	return tf(word, blob) * idf(word, blob)
+
+# input document 
+def idf_token_overlap(m1, m2, blob):
+	entity1 = m1["n"]
+	entity2 = m2["n"]
+
+	intersection_word = set.intersection(*[set(entity1), set(entity2)])
+	union_word = set.union(*[set(entity1), set(entity2)])
+	
+	numerator = 0
+	denominator = 0
+	for word in intersection_word:
+		numerator += idf_func(word, blob)
+	if numerator == 0:
+		return 0
+	else:
+		for word in union_word:
+			denominator += idf_func(word, blob)
+		return (numerator / denominator)
+
+def apply_idf_token_overlap(wordList, y, n_cluster_in, blob):
+	out = []
+	for item1 in wordList:
+		temp = []
+		for item2 in wordList:
+			result = np.exp(-idf_token_overlap(item1, item2, blob))
+			temp.append(result)
+		out.append(temp)
+	model = AgglomerativeClustering(n_clusters=n_cluster_in, affinity="precomputed", linkage="average")
+	model.fit(out)
+	result = model.labels_
+	Out_to_print = {}
+	Out_to_print["micro precision"] = micro_precision(result, y)
+	Out_to_print["micro recall"] = micro_recall(result, y)
+	Out_to_print["macro precision"] = macro_precision(result, y, n_cluster_in)
+	Out_to_print["macro recall"] = macro_recall(result, y, n_cluster_in)
+	Out_to_print["pairwise precision"] = pairwise_precision(result, y)
+	Out_to_print["pairwise recall"] = pairwise_recall(result, y)
+	return Out_to_print
+
+
+# In[11]:
+
+db = connect_to_database()
+cur = db.cursor()
+string = "select b.freebase_id, b.entity, b.relation, b.value, b.link_am_score, b.link_scroe, b.base_id, "
+string += "b.freebase_entity from EntitySelect b"
+cur.execute(string)
+results = cur.fetchall()
+groundTrue = {}
+label = []
+entity = []
+entityDict = {}
+y = []
+i= 0
+wordList = []
+allWord = []
+for result in results:
+	if result["freebase_id"] not in groundTrue:
+		groundTrue[result["freebase_id"]] = i
+		label.append(result["freebase_entity"].lower())
+		i = i + 1
+	if result["entity"] not in entityDict:
+		entityDict[result["entity"].lower()] = 1
+	entity.append(result["entity"].lower())
+	y.append(groundTrue[result["freebase_id"]])
+	
+	temp = {}
+	temp["n"] = result["entity"].lower().split()
+	list_A = result["relation"].lower().split()
+	list_A.extend(result["value"].lower().split())
+	temp["A"] = list_A
+	allWord.extend(result["entity"].lower().split())
+	allWord.extend(result["relation"].lower().split())
+	allWord.extend(result["value"].lower().split())
+	wordList.append(temp)
+
+print(idf_token_overlap(wordList[2], wordList[1], allWord))
+print(apply_idf_token_overlap(wordList, y, 150, allWord))
